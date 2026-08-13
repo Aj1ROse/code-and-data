@@ -16,9 +16,10 @@ import pywt
 from VMD import VMD
 
 # 固定VMD参数
-FIXED_ALPHA = 944
+FIXED_ALPHA = 758
 FIXED_K = 6
 FIXED_THRESHOLD = 0.4
+
 
 def load_signal_file(file_path):
     """加载信号文件"""
@@ -38,15 +39,16 @@ def load_signal_file(file_path):
         except:
             return None
 
+
 def extract_features_from_signal(signal_data, fs=100, scale_factor=0.305):
     """从信号中提取特征值"""
-    
+
     # 统一单位转换（根据信号类型使用不同的缩放因子）
     signal_data = signal_data * scale_factor
-    
+
     # 信号中心化
     signal_data = signal_data - np.mean(signal_data)
-    
+
     # 带通滤波 (0.5-20Hz)
     order = 5
     Wn = np.array([0.5, 20]) / (fs / 2)
@@ -82,7 +84,7 @@ def extract_features_from_signal(signal_data, fs=100, scale_factor=0.305):
     m, n = u.shape
     corr_coeffs = np.zeros(m)
     energy_contributions = np.zeros(m)
-    
+
     for i in range(m):
         # 时域相关性
         corr_coeffs[i] = abs(pearsonr(u[i, :], DATA['data'])[0])
@@ -111,6 +113,7 @@ def extract_features_from_signal(signal_data, fs=100, scale_factor=0.305):
     # 时域特征
     features['mean'] = np.mean(signal)
     features['std'] = np.std(signal)
+    features['variance'] = np.var(signal)
     features['rms'] = np.sqrt(np.mean(signal ** 2))
     features['peak'] = np.max(np.abs(signal))
     features['crest'] = np.max(np.abs(signal)) / np.sqrt(np.mean(signal ** 2))
@@ -125,11 +128,15 @@ def extract_features_from_signal(signal_data, fs=100, scale_factor=0.305):
     freq, psd = welch(signal, fs)
     features['dominant_freq'] = freq[np.argmax(psd)]
     features['mean_freq'] = np.sum(freq * psd) / np.sum(psd)
-    features['median_freq'] = np.median(freq)
+
+    cum_psd = np.cumsum(psd)
+    mid_idx = np.clip(np.searchsorted(cum_psd, cum_psd[-1] / 2.0), 0, len(freq) - 1)
+    features['median_freq'] = freq[mid_idx]
+
     psd_norm = psd / np.sum(psd)
     features['spectral_entropy'] = -np.sum(psd_norm * np.log2(psd_norm + np.finfo(float).eps)) / np.log2(len(psd))
     features['spectral_energy_mean'] = np.mean(psd)
-    
+
     band_5_15_idx = (freq >= 5) & (freq <= 15)
     band_5_15_energy = np.sum(psd[band_5_15_idx])
     total_energy = np.sum(psd)
@@ -137,20 +144,21 @@ def extract_features_from_signal(signal_data, fs=100, scale_factor=0.305):
 
     return features
 
+
 def process_signal_file(input_file, output_file=None, scale_factor=1000, verbose=True):
     """处理单个信号文件"""
-    
+
     # 检查输入文件
     if not os.path.exists(input_file):
         if verbose:
             print(f"错误: 找不到输入文件 {input_file}")
         return False
-    
+
     # 生成输出文件名
     if output_file is None:
         input_path = Path(input_file)
         output_file = input_path.parent / f"{input_path.stem}_features.csv"
-    
+
     try:
         # 加载信号
         signal_data = load_signal_file(input_file)
@@ -158,20 +166,20 @@ def process_signal_file(input_file, output_file=None, scale_factor=1000, verbose
             if verbose:
                 print(f"错误: 无法加载信号数据")
             return False
-        
+
         # 检查信号长度是否足够
         if len(signal_data) < 100:  # 需要足够的采样点进行分析
             if verbose:
                 print(f"错误: 信号长度太短 ({len(signal_data)} 采样点)")
             return False
-        
+
         if verbose:
             print(f"信号长度: {len(signal_data)} 个采样点")
             print("正在提取特征值...")
-        
+
         # 提取特征值
         features = extract_features_from_signal(signal_data, scale_factor=scale_factor)
-        
+
         # 检查特征值是否有效
         if not features or any(not np.isfinite(v) for v in features.values()):
             if verbose:
@@ -182,19 +190,18 @@ def process_signal_file(input_file, output_file=None, scale_factor=1000, verbose
         feature_names = list(features.keys())
         feature_values = list(features.values())
         feature_header = ','.join(feature_names)
-        
-        np.savetxt(output_file, [feature_values], delimiter=',', 
-                  header=feature_header, comments='')
-        
+
+        np.savetxt(output_file, [feature_values], delimiter=',',
+                   header=feature_header, comments='')
+
         if verbose:
             print(f"特征提取完成: {output_file}")
         return True
-        
+
     except Exception as e:
         if verbose:
             print(f"处理错误: {str(e)}")
         return False
-
 
 
 def print_usage():
@@ -225,44 +232,46 @@ def print_usage():
     print(f"  小波降噪: sym8, 3层分解")
     print("=" * 50)
 
+
 def main():
     """主程序"""
-    
+
     # 检查命令行参数
     if len(sys.argv) < 2:
         print_usage()
         return
-    
+
     if sys.argv[1] in ['-h', '--help', 'help']:
         print_usage()
         return
-    
+
     # 开始计时
     start_time = time.time()
-    
+
     # 解析命令行参数
     input_file = sys.argv[1]
     output_file = sys.argv[2] if len(sys.argv) > 2 else None
     scale_factor = float(sys.argv[3]) if len(sys.argv) > 3 else 1000
-    
+
     print(f" 输入文件: {input_file}")
     if output_file:
         print(f" 输出文件: {output_file}")
     else:
         print(f" 输出文件: 自动生成")
     print(f" 缩放因子: {scale_factor}")
-    
+
     # 处理信号文件
     success = process_signal_file(input_file, output_file, scale_factor=scale_factor, verbose=True)
 
     # 计算总耗时
     total_time = time.time() - start_time
-    
+
     if success:
         print(f"处理成功！总耗时: {total_time:.3f}秒")
     else:
         print(f"处理失败！总耗时: {total_time:.3f}秒")
         sys.exit(1)
 
+
 if __name__ == "__main__":
-    main() 
+    main()
